@@ -29,6 +29,11 @@ THE SOFTWARE.
       <!-- generate one row for the sid name @sid -->
       <d:tag name="row">
         <td class="left-most">${title}</td>
+        <j:if test="${descriptor.isFolderDescriptor()}">
+            <td width="*">
+                <f:checkbox name="isInheritable" checked="${instance.isInheritableSid(attrs.sid)}"/>
+            </td>
+        </j:if>
         <j:forEach var="g" items="${groups}">
           <j:forEach var="p" items="${g.permissions}">
             <j:if test="${descriptor.showPermission(p)}">
@@ -59,6 +64,11 @@ THE SOFTWARE.
         <td rowspan="2" class="pane-header blank">
           ${%User/group}
         </td>
+        <j:if test="${descriptor.isFolderDescriptor()}">
+            <td rowspan="2" class="pane-header blank">
+                Inherit
+            </td>
+        </j:if>
         <j:forEach var="g" items="${groups}">
           <j:set var="cnt" value="${0}" />
           <j:forEach var="p" items="${g.permissions}">
@@ -157,7 +167,9 @@ THE SOFTWARE.
             var tr = findAncestor(this,"TR");
             var inputs = tr.getElementsByTagName("INPUT");
             for(var i=0; i&lt;inputs.length; i++){
-                if(inputs[i].type == "checkbox") inputs[i].checked = !inputs[i].checked;
+                if(inputs[i].type == "checkbox" &amp;&amp; inputs[i].name != "isInheritable") {
+                    inputs[i].checked = !inputs[i].checked;
+                }
             }
             return false;
           };

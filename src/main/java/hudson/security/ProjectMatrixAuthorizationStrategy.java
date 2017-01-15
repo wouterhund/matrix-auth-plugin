@@ -36,7 +36,6 @@ import com.thoughtworks.xstream.io.HierarchicalStreamReader;
 import com.thoughtworks.xstream.converters.UnmarshallingContext;
 import com.thoughtworks.xstream.mapper.Mapper;
 import com.thoughtworks.xstream.core.JVM;
-import hudson.PluginManager;
 import org.acegisecurity.Authentication;
 import org.jenkinsci.plugins.matrixauth.Messages;
 
@@ -63,11 +62,11 @@ public class ProjectMatrixAuthorizationStrategy extends GlobalMatrixAuthorizatio
             } else if (amp.isBlocksParentInheritance()) {
                 return inheritingACL(getRootACL(), projectAcl);
             } else {
-                final ACL parentAcl = getACL(project.getParent());
+                final ACL parentAcl = getParentACL(project);
                 return inheritingACL(parentAcl, projectAcl);
             }
         } else {
-            return getACL(project.getParent());
+            return getParentACL(project);
         }
     }
 
@@ -83,7 +82,15 @@ public class ProjectMatrixAuthorizationStrategy extends GlobalMatrixAuthorizatio
         };
     }
 
-    public ACL getACL(ItemGroup g) {
+    protected ACL getParentACL(AbstractItem i) {
+        ItemGroup g = i.getParent();
+        if (Jenkins.getActiveInstance().getPlugin("cloudbees-folder") != null) { // optional dependency
+            if (g instanceof AbstractFolder) {
+                AbstractFolder folder = (AbstractFolder) g;
+                return getACL(folder, true);
+            }
+        }
+        
         if (g instanceof Item) {
             Item item = (Item) g;
             return item.getACL();
@@ -93,15 +100,20 @@ public class ProjectMatrixAuthorizationStrategy extends GlobalMatrixAuthorizatio
 
     @Override
     public ACL getACL(AbstractItem item) {
+        return getACL(item, false);
+    }
+    
+    public ACL getACL(AbstractItem item, boolean isParentProject) {
         if (Jenkins.getActiveInstance().getPlugin("cloudbees-folder") != null) { // optional dependency
             if (item instanceof AbstractFolder) {
                 com.cloudbees.hudson.plugins.folder.properties.AuthorizationMatrixProperty p = (com.cloudbees.hudson.plugins.folder.properties.AuthorizationMatrixProperty) ((AbstractFolder) item).getProperties().get(com.cloudbees.hudson.plugins.folder.properties.AuthorizationMatrixProperty.class);
                 if (p != null) {
-                    return inheritingACL(p.isBlocksParentInheritance() ? getRootACL() : getACL(item.getParent()), p.getACL());
+                    return inheritingACL(p.isBlocksParentInheritance() ? getRootACL() : getParentACL(item), isParentProject ? p.getInheritedACL() : p.getACL());
                 }
             }
         }
-        return getACL(item.getParent());
+        
+        return getParentACL(item);
     }
 
     @Override

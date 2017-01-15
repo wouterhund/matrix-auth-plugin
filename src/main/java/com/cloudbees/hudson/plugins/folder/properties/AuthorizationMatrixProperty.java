@@ -50,6 +50,8 @@ import org.kohsuke.stapler.StaplerRequest;
 
 import javax.servlet.ServletException;
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -67,8 +69,21 @@ import jenkins.model.Jenkins;
  * Holds ACL for {@link ProjectMatrixAuthorizationStrategy}.
  */
 public class AuthorizationMatrixProperty extends AbstractFolderProperty<AbstractFolder<?>> {
+    private static final Method SID_ACL_HAS_PERMISSION_METHOD;
 
+    static {
+        try {
+            SID_ACL_HAS_PERMISSION_METHOD = SidACL.class.getDeclaredMethod("hasPermission", Sid.class, Permission.class);
+            SID_ACL_HAS_PERMISSION_METHOD.setAccessible(true);
+        } catch (NoSuchMethodException ex) {
+            throw new RuntimeException("Could not proxy hasPermission", ex);
+        } catch (SecurityException ex) {
+            throw new RuntimeException("Could not proxy hasPermission", ex);
+        }
+    }
+    
     private transient SidACL acl = new AclImpl();
+    private transient SidACL inheritedAcl = new InheritedAclImpl();
 
     /**
      * List up all permissions that are granted.
@@ -81,6 +96,8 @@ public class AuthorizationMatrixProperty extends AbstractFolderProperty<Abstract
     private Set<String> sids = new HashSet<String>();
     
     private boolean blocksParentInheritance = false;
+    
+    private Set<String> nonInheritableSids = new HashSet<String>();
 
     protected AuthorizationMatrixProperty() {
     }
@@ -152,7 +169,11 @@ public class AuthorizationMatrixProperty extends AbstractFolderProperty<Abstract
                 if (r.getValue() instanceof JSONObject) {
                     for (Map.Entry<String, Boolean> e : (Set<Map.Entry<String, Boolean>>) ((JSONObject) r
                             .getValue()).entrySet()) {
-                        if (e.getValue()) {
+                        if("isInheritable".equals(e.getKey())) {
+                            if(!e.getValue()) {
+                                amp.addNonInheritableSid(sid);
+                            }
+                        } else if (e.getValue()) {
                             Permission p = Permission.fromId(e.getKey());
                             amp.add(p, sid);
                         }
@@ -195,6 +216,30 @@ public class AuthorizationMatrixProperty extends AbstractFolderProperty<Abstract
         public FormValidation doCheckName(@AncestorInPath AbstractFolder<?> folder, @QueryParameter String value) throws IOException, ServletException {
             return GlobalMatrixAuthorizationStrategy.DESCRIPTOR.doCheckName_(value, folder, AbstractProject.CONFIGURE);
         }
+        
+        public boolean isFolderDescriptor() {
+            return true;
+        }
+    }
+    
+    private final class InheritedAclImpl extends SidACL {
+        @Override
+        @edu.umd.cs.findbugs.annotations.SuppressWarnings(value = "NP_BOOLEAN_RETURN_NULL",
+                justification = "Because that is the way this SPI works")
+        protected Boolean hasPermission(Sid p, Permission permission) {
+            if(isInheritableSid(toString(p))) {
+                try {                
+                    return (Boolean) SID_ACL_HAS_PERMISSION_METHOD.invoke(getACL(), p, permission);
+                } catch (IllegalAccessException ex) {
+                    throw new RuntimeException("Could not proxy hasPermission", ex);
+                } catch (IllegalArgumentException ex) {
+                    throw new RuntimeException("Could not proxy hasPermission", ex);
+                } catch (InvocationTargetException ex) {
+                    throw new RuntimeException("Could not proxy hasPermission", ex);
+                }
+            }
+            return null;
+        }
     }
 
     private final class AclImpl extends SidACL {
@@ -205,6 +250,10 @@ public class AuthorizationMatrixProperty extends AbstractFolderProperty<Abstract
                 return true;
             return null;
         }
+    }
+    
+    public SidACL getInheritedACL() {
+        return inheritedAcl;
     }
 
     public SidACL getACL() {
@@ -228,6 +277,42 @@ public class AuthorizationMatrixProperty extends AbstractFolderProperty<Abstract
      */
     public boolean isBlocksParentInheritance() {
         return this.blocksParentInheritance;
+    }
+    
+    /**
+     * Sets the users whose permissions will not be inherited
+     *
+     * @param nonInheritableSids
+     */
+    protected void setNonInheritableSids(Set<String> nonInheritableSids) {
+        this.nonInheritableSids = nonInheritableSids;
+    }
+
+    /**
+     * Returns the users whose permissions will not be inherited
+     *
+     * @return
+     */
+    public Set<String> getNonInheritableSids() {
+        return this.nonInheritableSids;
+    }
+    
+    /**
+     * Add sid which will not be inherited
+     * 
+     * @param sid 
+     */
+    protected void addNonInheritableSid(String sid) {
+        getNonInheritableSids().add(sid);
+    }
+    
+    /**
+     * If sid is inheritable
+     * 
+     * @param sid 
+     */
+    public boolean isInheritableSid(String sid) {
+        return !getNonInheritableSids().contains(sid);
     }
 
     /**
@@ -280,6 +365,16 @@ public class AuthorizationMatrixProperty extends AbstractFolderProperty<Abstract
                 writer.setValue("true");
                 writer.endNode();
             }
+            
+            if(amp.nonInheritableSids.size() > 0) {
+                writer.startNode("nonInheritableSids");
+                for (String sid : amp.nonInheritableSids) {
+                    writer.startNode("sid");
+                    writer.setValue(sid);
+                    writer.endNode();
+                }
+                writer.endNode();
+            }
 
             for (Entry<Permission, Set<String>> e : amp.grantedPermissions
                     .entrySet()) {
@@ -302,6 +397,18 @@ public class AuthorizationMatrixProperty extends AbstractFolderProperty<Abstract
                 reader.moveDown();
                 as.setBlocksParentInheritance("true".equals(reader.getValue()));
                 reader.moveUp();
+                prop = reader.peekNextChild();
+            }
+            
+            if("nonInheritableSids".equals(prop)) {
+                reader.moveDown();
+                while(reader.hasMoreChildren()) {
+                    reader.moveDown();
+                    as.addNonInheritableSid(reader.getValue());
+                    reader.moveUp();
+                }
+                reader.moveUp();
+                prop = reader.peekNextChild();
             }
 
             while (reader.hasMoreChildren()) {
